@@ -11,7 +11,6 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.channels.FileLock
-import java.util.concurrent.TimeUnit
 
 
 fun Application.configureRouting() {
@@ -54,16 +53,26 @@ fun Application.configureRouting() {
 
                 call.respond(HttpStatusCode.Accepted);
                 launch(Dispatchers.IO) {
-//                    delay(Duration.ofSeconds(3))
-
                     call.application.environment.log.debug("${Thread.currentThread().name}: Before use lock: ${fileLock?.isValid}")
                     fileOutputStream.use { stream ->
                         call.application.environment.log.debug("${Thread.currentThread().name}: Start scan")
                         call.application.environment.log.debug("${Thread.currentThread().name}: Use lock: ${fileLock?.isValid}")
                         val process = scanArguments.run(file.parentFile, stream!!)
-
-                        process?.waitFor(15, TimeUnit.SECONDS);
+                        process[1].outputStream.use {
+                            call.application.environment.log.debug("${Thread.currentThread().name}: Waiting 0")
+                            process[0].inputStream.transferTo(it);
+                            call.application.environment.log.debug("${Thread.currentThread().name}: Finished")
+                        }
+                        launch(Dispatchers.IO) {
+                            call.application.environment.log.debug("${Thread.currentThread().name}: Waiting 1")
+                            process[1].inputStream.transferTo(stream);
+                            call.application.environment.log.debug("${Thread.currentThread().name}: Finished")
+                        }
+                        call.application.environment.log.debug("${Thread.currentThread().name}: Waiting Scan")
+                        process[0].waitFor()
                         call.application.environment.log.debug("${Thread.currentThread().name}: Finished scan")
+                        process[1].waitFor()
+                        call.application.environment.log.debug("${Thread.currentThread().name}: Finished format")
                     }
                 }
             }
@@ -74,21 +83,12 @@ fun Application.configureRouting() {
 @Location("/scan/{name}")
 class Scan(val name: String, val arg1: Int = 42, val arg2: String = "0")
 
-fun Scan.run(workingDir: File, fileOutputStream: FileOutputStream): Process? {
+fun Scan.run(workingDir: File, fileOutputStream: FileOutputStream): Array<Process> {
     val scanCommand = arrayOf("../sslscan", this.name)
     val formatCommand = arrayOf("aha", "--black")
 
     val scanProcessBuilder = ProcessBuilder(*scanCommand).directory(workingDir)
     val formatProcessBuilder = ProcessBuilder(*formatCommand).directory(workingDir)
 
-//    scanProcessBuilder.redirectOutput(formatProcessBuilder.redirectInput())
-
-    val scanProcess = scanProcessBuilder.start();
-    val formatProcess = formatProcessBuilder.start();
-
-    Thread(kotlinx.coroutines.Runnable {
-        scanProcess?.inputStream?.transferTo(fileOutputStream)
-    })
-
-    return scanProcess;
+    return arrayOf(scanProcessBuilder.start(), formatProcessBuilder.start())
 }
