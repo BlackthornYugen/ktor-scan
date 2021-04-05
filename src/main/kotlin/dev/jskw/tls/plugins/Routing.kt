@@ -8,13 +8,10 @@ import io.ktor.response.*
 import io.ktor.routing.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.time.delay
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.channels.FileLock
-import java.time.Duration
-import java.time.LocalDateTime
+import java.util.concurrent.TimeUnit
 
 
 fun Application.configureRouting() {
@@ -26,71 +23,50 @@ fun Application.configureRouting() {
         get("/") {
             call.respondText("Hello World!")
         }
-        get<Scan> { it ->
-            val file = File("cache/${it.name}.txt")
+        get<Scan> { scanArguments ->
+            val file = File("cache/${scanArguments.name}.html")
             if(false) {
-
-                if (file.totalSpace > 0) {
-                    call.respond(HttpStatusCode.TooManyRequests)
-                } else {
-                    call.respondText("Location: name=${it.name}, arg1=${it.arg1}, arg2=${it.arg2}")
-                }
+                call.respondText("Location: name=${scanArguments.name}, arg1=${scanArguments.arg1}, arg2=${scanArguments.arg2}\n")
             } else {
-                println("Main               : I'm working in thread ${Thread.currentThread().name}")
                 var fileOutputStream: FileOutputStream? = null
                 var fileLock : FileLock? = null
                 val getLock = launch(Dispatchers.IO) { // will get dispatched to DefaultDispatcher
-                    fileOutputStream = FileOutputStream(file, true);
+                    fileOutputStream = FileOutputStream(file);
 
                     try {
                         fileLock = try {
                             fileOutputStream!!.channel.tryLock()
                         } catch (exception: Exception) {
-//                            exception.toString().let { msg -> call.respondText(msg, status = HttpStatusCode.BadRequest) }
-//                            call.application.environment.log.error("grrr", exception)
                             throw exception;
                         }
-                    call.application.environment.log.debug("Lock aquired for ${file.absolutePath}.")
-
-//                    val bytes = FileInputStream(file).use { it.readBytes() }
-//                    println("Default               : I'm working in thread ${Thread.currentThread().name}")
-//                    println(bytes.decodeToString())
+                    call.application.environment.log.trace("Lock aquired for ${file.absolutePath}.")
                     } catch (exception: Exception) {
+                        call.application.environment.log.trace("Failed to get lock: ", exception);
                         return@launch
                     }
                 }
 
                 getLock.join()
                 if (fileLock?.isValid != true) {
-                    println("${Thread.currentThread().name} found a lock.")
-                    call.respond(HttpStatusCode(425, "Too Early"));
+                    call.respond(HttpStatusCode(420, "Enhance your calm"));
                     return@get
                 }
 
                 call.respond(HttpStatusCode.Accepted);
-                val writeData = launch(Dispatchers.IO) {
-                    delay(Duration.ofSeconds(3))
-                    println("Before use lock: ${fileLock?.isValid}")
-                    fileOutputStream.use {
-                        it?.write("${LocalDateTime.now()}\n".encodeToByteArray())
-                        println("Use lock: ${fileLock?.isValid}")
-                        if (fileLock?.isValid == true) {
-                            fileLock!!.release()
-                            println("${Thread.currentThread().name} released a lock.")
-                            call.application.environment.log.debug("Lock released for ${file.absolutePath}.")
-                        } else {
-                            println("${Thread.currentThread().name} said lock was invalid.")
-                        }
+                launch(Dispatchers.IO) {
+//                    delay(Duration.ofSeconds(3))
+
+                    call.application.environment.log.debug("${Thread.currentThread().name}: Before use lock: ${fileLock?.isValid}")
+                    fileOutputStream.use { stream ->
+                        call.application.environment.log.debug("${Thread.currentThread().name}: Start scan")
+                        call.application.environment.log.debug("${Thread.currentThread().name}: Use lock: ${fileLock?.isValid}")
+                        val process = scanArguments.run(file.parentFile, stream!!)
+
+                        process?.waitFor(15, TimeUnit.SECONDS);
+                        call.application.environment.log.debug("${Thread.currentThread().name}: Finished scan")
                     }
                 }
             }
-        }
-        // Register nested routes
-        get<Type.Edit> {
-            call.respondText("Inside $it")
-        }
-        get<Type.List> {
-            call.respondText("Inside $it")
         }
     }
 }
@@ -98,11 +74,21 @@ fun Application.configureRouting() {
 @Location("/scan/{name}")
 class Scan(val name: String, val arg1: Int = 42, val arg2: String = "0")
 
-@Location("/type/{name}")
-data class Type(val name: String) {
-    @Location("/edit")
-    data class Edit(val type: Type)
+fun Scan.run(workingDir: File, fileOutputStream: FileOutputStream): Process? {
+    val scanCommand = arrayOf("../sslscan", this.name)
+    val formatCommand = arrayOf("aha", "--black")
 
-    @Location("/list/{page}")
-    data class List(val type: Type, val page: Int)
+    val scanProcessBuilder = ProcessBuilder(*scanCommand).directory(workingDir)
+    val formatProcessBuilder = ProcessBuilder(*formatCommand).directory(workingDir)
+
+//    scanProcessBuilder.redirectOutput(formatProcessBuilder.redirectInput())
+
+    val scanProcess = scanProcessBuilder.start();
+    val formatProcess = formatProcessBuilder.start();
+
+    Thread(kotlinx.coroutines.Runnable {
+        scanProcess?.inputStream?.transferTo(fileOutputStream)
+    })
+
+    return scanProcess;
 }
