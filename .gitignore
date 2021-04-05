@@ -2,3 +2,4 @@
 gradlew.bat
 cache/
 build/
+out/
