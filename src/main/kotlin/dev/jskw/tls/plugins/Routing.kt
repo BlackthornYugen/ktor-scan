@@ -21,14 +21,14 @@ fun Application.configureRouting() {
 
     routing {
         get("/") {
-            call.respondText("Hello World!")
+            call.respondText("Welcome to my TLS scan API!")
         }
         post<Scan> { scanArguments ->
             val file = File("cache/${scanArguments.host}.html")
             var fileOutputStream: FileOutputStream? = null
-            var fileLock : FileLock? = null
+            var fileLock: FileLock? = null
 
-            val getLockThread = launch(Dispatchers.IO) { // will get dispatched to DefaultDispatcher
+            val getLockThread = launch(Dispatchers.IO) {
                 fileOutputStream = FileOutputStream(file);
 
                 try {
@@ -37,7 +37,7 @@ fun Application.configureRouting() {
                     } catch (exception: Exception) {
                         throw exception;
                     }
-                call.application.environment.log.trace("Lock aquired for ${file.absolutePath}.")
+                    call.application.environment.log.trace("Lock aquired for ${file.absolutePath}.")
                 } catch (exception: Exception) {
                     call.application.environment.log.trace("Failed to get lock: ", exception);
                     return@launch
@@ -108,11 +108,16 @@ fun Scan.run(streamToDisk: FileOutputStream): Array<Runnable> {
     val scanProcess = scanProcessBuilder.start()
     val formatProcess = formatProcessBuilder.start()
 
-    return arrayOf(Runnable {
-        formatProcess.outputStream.use { streamToFormatProcess ->
-            scanProcess.inputStream.transferTo(streamToFormatProcess)
+    return arrayOf(
+        // Job that will move data from scan process to format process
+        Runnable {
+            formatProcess.outputStream.use { streamToFormatProcess ->
+                scanProcess.inputStream.transferTo(streamToFormatProcess)
+            }
+        },
+        // Job that will move data from format process to disk
+        Runnable {
+            formatProcess.inputStream.transferTo(streamToDisk)
         }
-    }, Runnable {
-        formatProcess.inputStream.transferTo(streamToDisk)
-    })
+    )
 }
