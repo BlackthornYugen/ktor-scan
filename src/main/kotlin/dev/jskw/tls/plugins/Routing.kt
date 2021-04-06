@@ -11,8 +11,9 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.channels.FileLock
+import java.util.*
 
-
+@KtorExperimentalLocationsAPI
 fun Application.configureRouting() {
     install(AutoHeadResponse)
     install(Locations) {
@@ -27,7 +28,7 @@ fun Application.configureRouting() {
             var fileOutputStream: FileOutputStream? = null
             var fileLock : FileLock? = null
 
-            val getLock = launch(Dispatchers.IO) { // will get dispatched to DefaultDispatcher
+            val getLockThread = launch(Dispatchers.IO) { // will get dispatched to DefaultDispatcher
                 fileOutputStream = FileOutputStream(file);
 
                 try {
@@ -43,33 +44,24 @@ fun Application.configureRouting() {
                 }
             }
 
-            getLock.join()
+            getLockThread.join()
             if (fileLock?.isValid != true) {
                 call.respond(HttpStatusCode(420, "Enhance your calm"));
                 return@post
             }
 
             call.respond(HttpStatusCode.Accepted);
-            launch(Dispatchers.IO) {
-                fileOutputStream.use { stream ->
+            val writeFileThread = launch(Dispatchers.IO) {
+                fileOutputStream.use { streamToDisk ->
                     call.application.environment.log.debug("${Thread.currentThread().name}: Start scan")
 
-                    val process = scanArguments.run()
-                    process[1].outputStream.use {
-                        call.application.environment.log.debug("${Thread.currentThread().name}: Waiting 0")
-                        process[0].inputStream.transferTo(it);
-                        call.application.environment.log.debug("${Thread.currentThread().name}: Finished")
+                    val arrayOfRunnables = scanArguments.run(streamToDisk!!)
+
+                    launch {
+                        arrayOfRunnables[0].run()
                     }
-                    launch(Dispatchers.IO) {
-                        call.application.environment.log.debug("${Thread.currentThread().name}: Waiting 1")
-                        process[1].inputStream.transferTo(stream);
-                        call.application.environment.log.debug("${Thread.currentThread().name}: Finished")
-                    }
-                    call.application.environment.log.debug("${Thread.currentThread().name}: Waiting Scan")
-                    process[0].waitFor()
-                    call.application.environment.log.debug("${Thread.currentThread().name}: Finished scan")
-                    process[1].waitFor()
-                    call.application.environment.log.debug("${Thread.currentThread().name}: Finished format")
+
+                    arrayOfRunnables[1].run()
                 }
             }
         }
@@ -84,13 +76,17 @@ fun Application.configureRouting() {
  * @property port the port to scan
  * @property heartbleed check for OpenSSL Heartbleed (CVE-2014-0160)
  * @property renegotiation check for TLS renegotiation
- * @constructor Creates an empty group.
  */
+@KtorExperimentalLocationsAPI
 @Location("/scan/{host}")
 class Scan(val host: String, val port: Int = 443, val heartbleed: Boolean = true, val renegotiation: Boolean = true)
 
-
-fun Scan.run(): Array<Process> {
+/**
+ * Run a scan and save data to provided stream.
+ *
+ * @return two jobs that need to be run on different threads.
+ */
+fun Scan.run(streamToDisk: FileOutputStream): Array<Runnable> {
     val scanCommand = mutableListOf("./sslscan")
 
     if (!heartbleed) {
@@ -109,5 +105,14 @@ fun Scan.run(): Array<Process> {
     val scanProcessBuilder = ProcessBuilder(*scanCommand.toTypedArray())
     val formatProcessBuilder = ProcessBuilder(*formatCommand)
 
-    return arrayOf(scanProcessBuilder.start(), formatProcessBuilder.start())
+    val scanProcess = scanProcessBuilder.start()
+    val formatProcess = formatProcessBuilder.start()
+
+    return arrayOf(Runnable {
+        formatProcess.outputStream.use { streamToFormatProcess ->
+            scanProcess.inputStream.transferTo(streamToFormatProcess)
+        }
+    }, Runnable {
+        formatProcess.inputStream.transferTo(streamToDisk)
+    })
 }
