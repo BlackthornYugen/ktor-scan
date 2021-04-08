@@ -1,6 +1,5 @@
 package dev.jskw.tls
 
-import dev.jskw.tls.plugins.configureRouting
 import io.ktor.http.*
 import io.ktor.server.testing.*
 import kotlin.test.Test

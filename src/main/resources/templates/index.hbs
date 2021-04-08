@@ -1,0 +1,15 @@
+{{> header.hbs }}
+<!-- index.hbs begin -->
+<form method="post" enctype="application/x-www-form-urlencoded">
+    {{#scan.form.inputs}}
+    <label for="{{name}}">{{label}}</label><br>
+    <input type="{{type}}" id="{{name}}" name="{{name}}" value="{{ value }}"><br>
+    {{/scan.form.inputs}}
+    {{#scan.form.checkboxes}}
+    <input type="checkbox" title="{{description}}" id="{{name}}" name="{{name}}" value="true" {{#checked}}checked="checked"{{/checked}} >
+    <label for="{{name}}" title="{{description}}">{{label}}</label><br>
+    {{/scan.form.checkboxes}}
+    <input type="submit" value="Submit">
+</form>
+<!-- index.hbs end -->
+{{> footer.hbs }}
